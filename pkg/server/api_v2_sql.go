@@ -196,7 +196,6 @@ var SQLAPIClock timeutil.TimeSource = timeutil.DefaultTimeSource{}
 //	                  type: array
 //	                  description: The result rows.
 //	                  items: {}
-
 func (a *apiV2Server) execSQL(w http.ResponseWriter, r *http.Request) {
 	// Type for the request.
 	type requestType struct {
@@ -205,15 +204,12 @@ func (a *apiV2Server) execSQL(w http.ResponseWriter, r *http.Request) {
 		Database        string `json:"database"`
 		ApplicationName string `json:"application_name"`
 		Execute         bool   `json:"execute"`
-		SeparateTxns    bool   `json:"separate_txns"`
-		StopOnError     bool   `json:"stop_on_error"`
 		Statements      []struct {
 			SQL       string                               `json:"sql"`
 			stmt      statements.Statement[tree.Statement] `json:"-"`
 			Arguments []interface{}                        `json:"arguments,omitempty"`
 		} `json:"statements"`
 	}
-
 	// Type for the result.
 	type txnResult struct {
 		Statement    int               `json:"statement"` // index of statement in request.
@@ -368,68 +364,25 @@ func (a *apiV2Server) execSQL(w http.ResponseWriter, r *http.Request) {
 	options := []isql.TxnOption{
 		isql.WithPriority(admissionpb.NormalPri),
 	}
-
-	// execResultRunner is the function that runs the entirety of the request.
-	var execResultRunner func(context.Context, func(context.Context, isql.Txn) error, ...isql.TxnOption) error
-	// stmtRunner is the function that runs each statement in turn.
-	var stmtRunner func(ctx context.Context, outerTxn isql.Txn, queryFn func(ctx context.Context, innerTxn isql.Txn) error, opts ...isql.TxnOption) error
-	var handleStmtErr func(outerErr, stmtErr error) (err error, terminate bool)
-
-	// Select which runners to use depending on the transaction mode.
-	if !requestPayload.SeparateTxns {
-		execResultRunner = a.sqlServer.internalDB.Txn
-		handleStmtErr = func(_, stmtErr error) (error, bool) {
-			// In a single txn, any stmt err ends the txn
-			return stmtErr, stmtErr != nil
-		}
-		stmtRunner = func(ctx context.Context, outerTxn isql.Txn, queryFn func(ctx context.Context, innerTxn isql.Txn) error, _ ...isql.TxnOption) error {
-			return queryFn(ctx, outerTxn)
-		}
-	} else {
-		execResultRunner = func(ctx context.Context, queryFn func(ctx context.Context, txn isql.Txn) error, _ ...isql.TxnOption) error {
-			return queryFn(ctx, nil /* txn */)
-		}
-		handleStmtErr = func(outerErr, stmtErr error) (error, bool) {
-			// If we encounter a stmt error with separate txns, set the outer error
-			if stmtErr != nil {
-				if outerErr == nil {
-					outerErr = errors.New("separate transaction payload encountered transaction error(s)")
-				}
-				// If StopOnError is specified, return the outerErr and terminate
-				if requestPayload.StopOnError {
-					return outerErr, true
-				}
-			}
-			// Return outerErr without terminating
-			return outerErr, false
-		}
-		stmtRunner = func(ctx context.Context, _ isql.Txn, queryFn func(ctx context.Context, innerTxn isql.Txn) error, opts ...isql.TxnOption) error {
-			return a.sqlServer.internalDB.Txn(ctx, queryFn, opts...)
-		}
-	}
-
 	result.Execution = &execResult{}
 	result.Execution.TxnResults = make([]txnResult, 0, len(requestPayload.Statements))
 
 	err = timeutil.RunWithTimeout(ctx, "run-sql-via-api", timeout, func(ctx context.Context) error {
 		retryNum := 0
-		return execResultRunner(ctx, func(ctx context.Context, txn isql.Txn) error {
+
+		return a.sqlServer.internalDB.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
 			result.Execution.TxnResults = result.Execution.TxnResults[:0]
 			result.Execution.Retries = retryNum
 			retryNum++
 			curSize := uintptr(0)
-			var outerErr error
-			checkSize := func(size uintptr) error {
-				if size > uintptr(requestPayload.MaxResultSize) {
-					return errors.New("max result size exceeded")
-				}
-				return nil
-			}
 			addSize := func(row tree.Datums) error {
 				for _, c := range row {
 					curSize += c.Size()
 				}
-				return checkSize(curSize)
+				if curSize > uintptr(requestPayload.MaxResultSize) {
+					return errors.New("max result size exceeded")
+				}
+				return nil
 			}
 
 			for stmtIdx, stmt := range requestPayload.Statements {
@@ -442,7 +395,7 @@ func (a *apiV2Server) execSQL(w http.ResponseWriter, r *http.Request) {
 				txnRes := &result.Execution.TxnResults[stmtIdx]
 
 				returnType := stmt.stmt.AST.StatementReturnType()
-				stmtErr := stmtRunner(ctx, txn, func(ctx context.Context, txn isql.Txn) (retErr error) {
+				stmtErr := func() (retErr error) {
 					txnRes.Start = jsonTime(SQLAPIClock.Now())
 					txnRes.Statement = stmtIdx + 1
 					txnRes.Tag = stmt.stmt.AST.StatementTag()
@@ -453,13 +406,6 @@ func (a *apiV2Server) execSQL(w http.ResponseWriter, r *http.Request) {
 							txnRes.Error = &jsonError{retErr}
 						}
 					}()
-
-					// If the max size has been exceeded by previous statements/transactions
-					// avoid executing, return immediately.
-					err := checkSize(curSize)
-					if err != nil {
-						return err
-					}
 
 					it, err := txn.QueryIteratorEx(ctx, "run-query-via-api", txn.KV(),
 						sessiondata.InternalExecutorOverride{
@@ -496,14 +442,12 @@ func (a *apiV2Server) execSQL(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 					return err
-				}, options...)
-				handledErr, terminate := handleStmtErr(outerErr, stmtErr)
-				outerErr = handledErr
-				if terminate {
-					return outerErr
+				}()
+				if stmtErr != nil {
+					return stmtErr
 				}
 			}
-			return outerErr
+			return nil
 		}, options...)
 	})
 	if err != nil {

@@ -139,8 +139,8 @@ func BenchmarkSqlStatsPersisted(b *testing.B) {
 					base.TestClusterArgs{
 						ReplicationMode: base.ReplicationAuto,
 						ServerArgs: base.TestServerArgs{
-							UseDatabase:       "bench",
 							SQLMemoryPoolSize: 512 << 20,
+							UseDatabase:       "system",
 						},
 					})
 				sqlRunner := sqlutils.MakeRoundRobinSQLRunner(tc.Conns[0],
@@ -155,8 +155,8 @@ func BenchmarkSqlStatsPersisted(b *testing.B) {
 					base.TestClusterArgs{
 						ReplicationMode: base.ReplicationAuto,
 						ServerArgs: base.TestServerArgs{
-							UseDatabase:       "bench",
 							SQLMemoryPoolSize: 512 << 20,
+							UseDatabase:       "system",
 						},
 					})
 				sqlRunner := sqlutils.MakeRoundRobinSQLRunner(tc.Conns[0],
@@ -212,28 +212,28 @@ func BenchmarkSqlStatsPersisted(b *testing.B) {
 
 				// DROP INDEX queries
 				dropExecutionCountIdx :=
-					fmt.Sprintf("DROP INDEX system.transaction_statistics@%s; "+
-						"DROP INDEX system.statement_statistics@%s;", executionCountIdx,
+					fmt.Sprintf("DROP INDEX transaction_statistics@%s; "+
+						"DROP INDEX statement_statistics@%s;", executionCountIdx,
 						executionCountIdx)
 				dropServiceLatencyIdx :=
-					fmt.Sprintf("DROP INDEX system.transaction_statistics@%s; "+
-						"DROP INDEX system.statement_statistics@%s;", serviceLatencyIdx,
+					fmt.Sprintf("DROP INDEX transaction_statistics@%s; "+
+						"DROP INDEX statement_statistics@%s;", serviceLatencyIdx,
 						serviceLatencyIdx)
 				dropSqlCpuNanosIdx :=
-					fmt.Sprintf("DROP INDEX system.transaction_statistics@%s; "+
-						"DROP INDEX system.statement_statistics@%s;", sqlCpuNanosIdx,
+					fmt.Sprintf("DROP INDEX transaction_statistics@%s; "+
+						"DROP INDEX statement_statistics@%s;", sqlCpuNanosIdx,
 						sqlCpuNanosIdx)
 				dropContentionTimeIdx :=
-					fmt.Sprintf("DROP INDEX system.transaction_statistics@%s; "+
-						"DROP INDEX system.statement_statistics@%s;", contentionTimeIdx,
+					fmt.Sprintf("DROP INDEX transaction_statistics@%s; "+
+						"DROP INDEX statement_statistics@%s;", contentionTimeIdx,
 						contentionTimeIdx)
 				dropTotalEstimatedExecutionTimeIdx :=
-					fmt.Sprintf("DROP INDEX system.transaction_statistics@%s; "+
-						"DROP INDEX system.statement_statistics@%s;",
+					fmt.Sprintf("DROP INDEX transaction_statistics@%s; "+
+						"DROP INDEX statement_statistics@%s;",
 						totalEstimatedExecutionTimeIdx, totalEstimatedExecutionTimeIdx)
 				dropP99LatencyIdx :=
-					fmt.Sprintf("DROP INDEX system.transaction_statistics@%s; "+
-						"DROP INDEX system.statement_statistics@%s;", p99LatencyIdx,
+					fmt.Sprintf("DROP INDEX transaction_statistics@%s; "+
+						"DROP INDEX statement_statistics@%s;", p99LatencyIdx,
 						p99LatencyIdx)
 				dropQueries := []string{dropExecutionCountIdx, dropServiceLatencyIdx,
 					dropSqlCpuNanosIdx, dropContentionTimeIdx,
@@ -270,7 +270,7 @@ func BenchmarkSqlStatsPersisted(b *testing.B) {
 										%s,
 										metadata,
 										statistics
-									FROM system.transaction_statistics
+									FROM transaction_statistics
 									WHERE app_name NOT LIKE '$ internal%%' AND 
 										aggregated_ts > (now() - INTERVAL '1 hour') %s`,
 						computeExpressions[0],
@@ -304,7 +304,7 @@ func BenchmarkSqlStatsPersisted(b *testing.B) {
 										%s,
 										metadata,
 										statistics
-									FROM system.statement_statistics
+									FROM statement_statistics
 									WHERE app_name NOT LIKE '$ internal%%' AND 
 										aggregated_ts > (now() - INTERVAL '1 hour') %s`,
 						computeExpressions[0],
